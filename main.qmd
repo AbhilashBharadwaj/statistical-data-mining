@@ -1,0 +1,397 @@
+
+---
+title: "Final Project"
+authors: 
+      name - Nikitha Sadananda Abhilash Sampath Harshavardhan Baira Reddy
+format: pdf
+
+---
+
+
+
+
+#Lasso
+```{r}
+
+library(dplyr)
+library(caret)
+library(glmnet)
+library(Metrics)
+library(rpart)
+library(randomForest)
+library(rpart.plot)
+
+# Helper function to convert factors and characters to numeric levels and handle missing values
+convert_to_numeric <- function(df) {
+  for (col in names(df)) {
+    if (is.factor(df[[col]]) || is.character(df[[col]])) {
+      df[[col]] <- as.numeric(as.factor(df[[col]]))
+    }
+  }
+  return(df)
+}
+
+# Function to train and evaluate LASSO regression
+train_eval_lasso <- function(data, target_var, n_bootstraps = 100) {
+  # Prepare the dataset
+  non_feature_cols <- c("rank", "source", "industries", "organization",
+                        "title", "state", "residenceStateRegion", "city", "birthDate",
+                        "birthMonth", "birthDay", "lastName", "firstName", "birthYear",
+                        "date", "latitude_country", "longitude_country", "personName", target_var)
+  
+  # Select the target variable and handle missing values
+  y <- data[[target_var]]
+  y[is.na(y)] <- median(y, na.rm = TRUE) # Replace missing values with median
+  
+  # Prepare the feature dataset
+  X <- data %>% select(-one_of(non_feature_cols))
+  
+  # Convert all columns to numeric and handle missing values
+  X <- convert_to_numeric(X)
+  X[is.na(X)] <- 0 # Replace missing values with 0
+  
+  # Check for zero-variance predictors and remove them
+  nzv <- nearZeroVar(X, saveMetrics = TRUE)
+  X <- X[, nzv$nzv == FALSE]
+  
+  # Split the data into training and testing sets
+  set.seed(42) # for reproducibility
+  index <- createDataPartition(y, p = .8, list = FALSE)
+  X_train <- X[index, ]
+  X_test <- X[-index, ]
+  y_train <- y[index]
+  y_test <- y[-index]
+  
+  # Standardize the features for LASSO regression
+  X_train_scaled <- scale(X_train)
+  X_test_scaled <- scale(X_test, center = attr(X_train_scaled, "scaled:center"), scale = attr(X_train_scaled, "scaled:scale"))
+  
+  # Set up cross-validation for LASSO regression
+  cv_fit_lasso <- cv.glmnet(X_train_scaled, y_train, alpha = 1, type.measure = "mse", nfolds = 10)
+  
+  # Fit LASSO regression model with the optimal lambda found in cross-validation
+  lasso_model <- glmnet(X_train_scaled, y_train, alpha = 1, lambda = cv_fit_lasso$lambda.min)
+  
+  # Predict on training and test data
+  lasso_train_preds <- predict(lasso_model, s = cv_fit_lasso$lambda.min, newx = X_train_scaled)
+  lasso_test_preds <- predict(lasso_model, s = cv_fit_lasso$lambda.min, newx = X_test_scaled)
+  
+  # Evaluate the LASSO model using Mean Absolute Error
+  lasso_train_mae <- mae(y_train, lasso_train_preds)
+  lasso_test_mae <- mae(y_test, lasso_test_preds)
+  
+  # Visualize predictions vs reality for LASSO Regression
+  plot(y_train, lasso_train_preds, main = 'LASSO Regression: Train Data', xlab = 'Actual', ylab = 'Predicted', col = 'blue')
+  abline(0, 1, col = 'red')
+  plot(y_test, lasso_test_preds, main = 'LASSO Regression: Test Data', xlab = 'Actual', ylab = 'Predicted', col = 'green')
+  abline(0, 1, col = 'red')
+  
+  # Calculate RMSE for LASSO Regression
+  lasso_train_rmse <- sqrt(mean((y_train - lasso_train_preds)^2))
+  lasso_test_rmse <- sqrt(mean((y_test - lasso_test_preds)^2))
+  
+  # Calculate R-squared for LASSO Regression
+  lasso_train_r2 <- cor(y_train, lasso_train_preds)^2
+  lasso_test_r2 <- cor(y_test, lasso_test_preds)^2
+  
+  # Extract coefficients from the LASSO model
+  lasso_coefs <- coef(lasso_model, s = cv_fit_lasso$lambda.min)
+  
+  # Bootstrap analysis for LASSO
+  coef_matrix <- matrix(NA, nrow = n_bootstraps, ncol = ncol(X_train_scaled) + 1)
+  
+  for(i in 1:n_bootstraps) {
+    boot_indices <- sample(nrow(X_train_scaled), replace = TRUE)
+    X_train_boot <- X_train_scaled[boot_indices, ]
+    y_train_boot <- y_train[boot_indices]
+    lasso_boot_model <- glmnet(X_train_boot, y_train_boot, alpha = 1, lambda = cv_fit_lasso$lambda.min)
+    boot_coefs <- as.matrix(coef(lasso_boot_model, s = cv_fit_lasso$lambda.min))[,1]
+    coef_matrix[i, 1:length(boot_coefs)] <- boot_coefs
+  }
+  
+  # Calculate standard deviation of coefficients
+  coef_sd <- apply(coef_matrix, 2, sd, na.rm = TRUE)
+  
+  result <- list(
+    model = lasso_model,
+    train_mae = lasso_train_mae,
+    test_mae = lasso_test_mae,
+    train_rmse = lasso_train_rmse,
+    test_rmse = lasso_test_rmse,
+    train_r2 = lasso_train_r2,
+    test_r2 = lasso_test_r2,
+    coefficients = lasso_coefs,
+    coefficient_sd = coef_sd
+  )
+  
+  return(result)
+}
+
+
+
+```
+
+#Decision Tree
+```{r}
+train_decision_tree <- function(data, target_variable, n_bootstraps = 100) {
+  # Prepare the dataset
+  non_feature_cols <- c("rank", "source", "industries", "organization",
+                        "title", "state", "residenceStateRegion", "city", "birthDate",
+                        "birthMonth", "birthDay", "lastName", "firstName", "birthYear",
+                        "date", "latitude_country", "longitude_country", "personName", target_variable)
+  X <- data %>% select(-one_of(non_feature_cols))
+  X <- convert_to_numeric(X)
+  X[is.na(X)] <- 0  # Replace missing values with 0
+  
+  # Target variable - ensure no missing values
+  y <- data[[target_variable]]
+  y[is.na(y)] <- median(y, na.rm = TRUE)
+  
+  # Combine X and y into a single data frame for modeling
+  model_data <- cbind(X, finalWorth = y)
+  
+  data <- model_data  # Update data to the prepared dataset
+  
+  set.seed(42)
+  trainIndex <- createDataPartition(data[[target_variable]], p = .8, list = FALSE)
+  train_data <- data[trainIndex, ]
+  test_data <- data[-trainIndex, ]
+  
+  dt_model <- rpart(formula(paste(target_variable, "~ .")), data = train_data, method = "anova")
+  
+  dt_train_preds <- predict(dt_model, newdata = train_data)
+  dt_test_preds <- predict(dt_model, newdata = test_data)
+  dt_train_r2 <- cor(train_data[[target_variable]], dt_train_preds)^2
+  dt_test_r2 <- cor(test_data[[target_variable]], dt_test_preds)^2
+  
+  # Variable Importance
+  dt_importance <- varImp(dt_model, scale = FALSE)
+  
+  # Bootstrap
+  boot_preds <- matrix(NA, nrow = n_bootstraps, ncol = nrow(test_data))
+  
+  for (i in 1:n_bootstraps) {
+    boot_indices <- sample(nrow(train_data), replace = TRUE)
+    X_train_boot <- train_data[boot_indices, ]
+    y_train_boot <- X_train_boot[[target_variable]]
+    dt_boot_model <- rpart(formula(paste(target_variable, "~ .")), data = X_train_boot, method = "anova")
+    boot_preds[i, ] <- predict(dt_boot_model, newdata = test_data)
+  }
+  
+  # Calculate the standard deviation of predictions across bootstraps
+  boot_sd <- apply(boot_preds, 2, sd)
+  
+  # Visualizations
+  # Plot the decision tree
+  rpart.plot(dt_model, type=4, extra=101)
+  # # Plot the importance of variables
+  barplot(dt_importance$Overall, names.arg=rownames(dt_importance), las=2, main="Variable Importance")
+
+  
+  # Evaluation metrics
+  # Calculate RMSE for train and test
+  dt_train_rmse <- sqrt(mean((train_data[[target_variable]] - dt_train_preds)^2))
+  dt_test_rmse <- sqrt(mean((test_data[[target_variable]] - dt_test_preds)^2))
+  
+  # Calculate MAE for train and test
+  dt_train_mae <- mae(train_data[[target_variable]], dt_train_preds)
+  dt_test_mae <- mae(test_data[[target_variable]], dt_test_preds)
+  
+  result <- list(
+    model = dt_model,
+    train_preds = dt_train_preds,
+    test_preds = dt_test_preds,
+    train_r2 = dt_train_r2,
+    test_r2 = dt_test_r2,
+    importance = dt_importance,
+    boot_sd = boot_sd,
+    train_rmse = dt_train_rmse,
+    test_rmse = dt_test_rmse,
+    train_mae = dt_train_mae,
+    test_mae = dt_test_mae
+  )
+  
+  return(result)
+}
+
+
+```
+
+# Random Forest
+```{r}
+# Function to prepare data and train Random Forest Regressor with variable importance and bootstrapping
+train_random_forest <- function(data, target_variable, n_bootstraps = 10) {
+  # Prepare the dataset
+  non_feature_cols <- c("rank", "source", "industries", "organization",
+                        "title", "state", "residenceStateRegion", "city", "birthDate",
+                        "birthMonth", "birthDay", "lastName", "firstName", "birthYear",
+                        "date", "latitude_country", "longitude_country", "personName", target_variable)
+  X <- data %>% select(-one_of(non_feature_cols))
+  X <- convert_to_numeric(X)
+  X[is.na(X)] <- 0  # Replace missing values with 0
+  
+  # Target variable - ensure no missing values
+  y <- data[[target_variable]]
+  y[is.na(y)] <- median(y, na.rm = TRUE)
+  
+  # Combine X and y into a single data frame for modeling
+  model_data <- cbind(X, cpi_country = y)
+  
+  data <- model_data  # Update data to the prepared dataset
+  
+  set.seed(42)
+  trainIndex <- createDataPartition(data[[target_variable]], p = .8, list = FALSE)
+  train_data <- data[trainIndex, ]
+  test_data <- data[-trainIndex, ]
+  
+  rf_model <- randomForest(formula(paste(target_variable, "~ .")), data = train_data)
+  
+  rf_train_preds <- predict(rf_model, newdata = train_data)
+  rf_test_preds <- predict(rf_model, newdata = test_data)
+  rf_train_r2 <- cor(train_data[[target_variable]], rf_train_preds)^2
+  rf_test_r2 <- cor(test_data[[target_variable]], rf_test_preds)^2
+  
+  # Variable Importance
+  rf_importance <- varImp(rf_model, scale = FALSE)
+  
+  # Bootstrap
+  boot_results <- replicate(n_bootstraps, {
+    indices <- sample(nrow(train_data), replace = TRUE)
+    rf_boot <- randomForest(formula(paste(target_variable, "~ .")), data = train_data[indices, ])
+    predict(rf_boot, newdata = test_data)
+  })
+  
+  # Calculate the standard deviation of predictions across bootstraps
+  boot_sd <- apply(boot_results, 1, sd)
+  
+  # Visualizations
+  # Plot the variable importance
+  # varImpPlot(rf_importance)
+  
+  # Plot the random forest model
+  plot(rf_model)
+  
+  # Evaluation metrics
+  # Calculate RMSE for train and test
+  rf_train_rmse <- sqrt(mean((train_data[[target_variable]] - rf_train_preds)^2))
+  rf_test_rmse <- sqrt(mean((test_data[[target_variable]] - rf_test_preds)^2))
+  
+  # Calculate MAE for train and test
+  rf_train_mae <- mae(train_data[[target_variable]], rf_train_preds)
+  rf_test_mae <- mae(test_data[[target_variable]], rf_test_preds)
+  
+  result <- list(
+    model = rf_model,
+    train_preds = rf_train_preds,
+    test_preds = rf_test_preds,
+    train_r2 = rf_train_r2,
+    test_r2 = rf_test_r2,
+    importance = rf_importance,
+    boot_sd = boot_sd,
+    train_rmse = rf_train_rmse,
+    test_rmse = rf_test_rmse,
+    train_mae = rf_train_mae,
+    test_mae = rf_test_mae
+  )
+  
+  return(result)
+}
+
+```
+
+```{r}
+
+
+# Load the data
+data <- read.csv("./Billionaires Statistics Dataset.csv")
+
+target_variable <- "cpi_country"  
+# Train and evaluate LASSO regression
+lasso_result <- train_eval_lasso(data, target_variable)
+print(paste("LASSO Train MAE:", lasso_result$train_mae))
+print(paste("LASSO Test MAE:", lasso_result$test_mae))
+print(paste("LASSO Train RMSE:", lasso_result$train_rmse))
+print(paste("LASSO Test RMSE:", lasso_result$test_rmse))
+print(paste("LASSO Train R2:", lasso_result$train_r2))
+print(paste("LASSO Test R2:", lasso_result$test_r2))
+print(lasso_result$coefficients)
+print(lasso_result$coefficient_sd)
+
+
+
+
+```
+
+```{r}
+# 
+# data <- read.csv("./Billionaires Statistics Dataset.csv")
+# 
+# target_variable <- "cpi_country"  
+
+# Train Decision Tree Regressor and visualize/evaluate
+dt_result <- train_decision_tree(data, target_variable)
+print(paste("Decision Tree Train R2:", dt_result$train_r2))
+print(paste("Decision Tree Test R2:", dt_result$test_r2))
+print(dt_result$importance)
+print(dt_result$boot_sd)
+print(paste("Decision Tree Train RMSE:", dt_result$train_rmse))
+print(paste("Decision Tree Test RMSE:", dt_result$test_rmse))
+print(paste("Decision Tree Train MAE:", dt_result$train_mae))
+print(paste("Decision Tree Test MAE:", dt_result$test_mae))
+```
+```{r}
+rf_result <- train_random_forest(data, target_variable)
+print(paste("Random Forest Train R2:", rf_result$train_r2))
+print(paste("Random Forest Test R2:", rf_result$test_r2))
+print(rf_result$importance)
+print(rf_result$boot_sd)
+print(paste("Random Forest Train RMSE:", rf_result$train_rmse))
+print(paste("Random Forest Test RMSE:", rf_result$test_rmse))
+print(paste("Random Forest Train MAE:", rf_result$train_mae))
+print(paste("Random Forest Test MAE:", rf_result$test_mae))
+```
+
+
+
+```{r}
+target_variable <- "finalWorth"  
+# Train and evaluate LASSO regression
+lasso_result <- train_eval_lasso(data, target_variable)
+print(paste("LASSO Train MAE:", lasso_result$train_mae))
+print(paste("LASSO Test MAE:", lasso_result$test_mae))
+print(paste("LASSO Train RMSE:", lasso_result$train_rmse))
+print(paste("LASSO Test RMSE:", lasso_result$test_rmse))
+print(paste("LASSO Train R2:", lasso_result$train_r2))
+print(paste("LASSO Test R2:", lasso_result$test_r2))
+print(lasso_result$coefficients)
+print(lasso_result$coefficient_sd)
+```
+
+
+```{r}
+dt_result <- train_decision_tree(data, target_variable)
+print(paste("Decision Tree Train R2:", dt_result$train_r2))
+print(paste("Decision Tree Test R2:", dt_result$test_r2))
+print(dt_result$importance)
+print(dt_result$boot_sd)
+print(paste("Decision Tree Train RMSE:", dt_result$train_rmse))
+print(paste("Decision Tree Test RMSE:", dt_result$test_rmse))
+print(paste("Decision Tree Train MAE:", dt_result$train_mae))
+
+
+
+print(paste("Decision Tree Test MAE:", dt_result$test_mae))
+```
+
+```{r}
+rf_result <- train_random_forest(data, target_variable)
+print(paste("Random Forest Train R2:", rf_result$train_r2))
+print(paste("Random Forest Test R2:", rf_result$test_r2))
+print(rf_result$importance)
+print(rf_result$boot_sd)
+print(paste("Random Forest Train RMSE:", rf_result$train_rmse))
+print(paste("Random Forest Test RMSE:", rf_result$test_rmse))
+print(paste("Random Forest Train MAE:", rf_result$train_mae))
+print(paste("Random Forest Test MAE:", rf_result$test_mae))
+```
+
