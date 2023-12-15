@@ -1,0 +1,136 @@
+---
+title: "Final Project"
+authors: 
+      name - Nikitha Sadananda Abhilash Sampath Harshavardhan Baira Reddy
+format: pdf
+
+---
+
+
+#Loading the dataset
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(caret)
+library(car)
+library(Metrics)
+library(randomForest)
+library(corrplot)
+
+load_and_prepare_data <- function(file_path) {
+  data <- read.csv(file_path)
+  
+  data %>%
+    select(-organization, -latitude_country, -longitude_country, 
+           -firstName, -lastName, -date, -state, -residenceStateRegion, 
+           -birthDate, -personName, -industries, -source) %>%
+    mutate(age = ifelse(is.na(age), median(age, na.rm = TRUE), age)) %>%
+    filter(complete.cases(.))
+}
+
+```
+
+
+#The plots for EDA
+```{r}
+
+plot_bar_chart <- function(data, column, title, fill_color = "blue") {
+  ggplot(data, aes_string(x = column, y = "n")) +
+    geom_bar(stat = "identity", fill = fill_color) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    labs(title = title, x = column, y = "Count")
+}
+
+plot_histogram <- function(data, column, fill_color = "blue") {
+  ggplot(data, aes_string(x = column)) +
+    geom_histogram(bins = 30, fill = fill_color, color = "black") +
+    theme_minimal() +
+    labs(title = paste("Distribution of", column), x = column, y = "Count")
+}
+
+plot_correlation <- function(data) {
+  numerical_data <- data %>% select_if(is.numeric)
+  correlations <- cor(numerical_data, use = "complete.obs")
+  par(mar=c(5,5,2,2))
+  corrplot(correlations, method = "circle", type = "upper", order = "hclust", 
+           tl.col = "black", tl.srt = 45, tl.cex = 0.6)
+}
+
+```
+
+#Data Analysis Functions
+```{r}
+analyze_category <- function(data) {
+  # Count the occurrences of each category and sort them in descending order
+  category_count <- data %>%
+    count(category) %>%
+    arrange(desc(n))
+  
+  # Plot the results in a bar chart with categories sorted from most to least represented
+  plot_bar_chart(category_count, "category", "Most Represented Industries Among Billionaires", "skyblue")
+}
+
+analyze_wealth_origin <- function(data) {
+  wealth_origin <- data %>% count(selfMade)
+  plot_bar_chart(wealth_origin, "selfMade", "Self-Made vs Inheritance", "orange")
+}
+
+analyze_geographical_distribution <- function(data) {
+  country_distribution <- data %>% count(country)
+  plot_bar_chart(country_distribution, "country", "Distribution of Billionaires by Country", "green")
+}
+
+analyze_education_background <- function(data) {
+  education_distribution <- data %>%
+    mutate(gross_tertiary_education_enrollment_grouped = cut(gross_tertiary_education_enrollment, breaks = 10)) %>%
+    count(gross_tertiary_education_enrollment_grouped)
+
+  p <- ggplot(education_distribution, aes(x = gross_tertiary_education_enrollment_grouped, y = n)) +
+    geom_bar(stat = "identity", fill = "red", size = 1) +
+    labs(title = "Educational Background of Billionaires", x = "Gross Tertiary Education Enrollment", y = "Count") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x labels for better readability
+  
+  # To zoom in on x-axis if needed
+  # p <- p + xlim(c(min_value, max_value)) # specify your range with min_value and max_value
+
+  print(p)
+}
+
+analyze_age_distribution <- function(data) {
+  plot_histogram(data, "age", "red")
+}
+```
+
+
+
+# Main
+```{r}
+file_path <- "D:/Downloads/Billionaires Statistics Dataset.csv"
+data <- load_and_prepare_data(file_path)
+
+#Visualization
+
+# Correlation Analysis
+plot_correlation(data)
+
+# Industry Analysis
+analyze_category(data)
+
+# Wealth Origin Analysis
+analyze_wealth_origin(data)
+
+# Geographical Distribution Analysis
+analyze_geographical_distribution(data)
+
+# Education Background Analysis
+analyze_education_background(data)
+
+# Age Distribution Analysis
+analyze_age_distribution(data)
+```
+
+
